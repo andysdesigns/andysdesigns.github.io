@@ -6,10 +6,10 @@
 <title>Halftone Pen Plotter</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:monospace;background:#ccc;display:flex;align-items:flex-start;justify-content:center;padding:20px;min-height:100vh}
-.app{display:grid;grid-template-columns:310px 1fr;min-height:700px;border:1px solid #bbb;border-radius:10px;overflow:hidden;background:#fff;width:100%;max-width:1200px;box-shadow:0 4px 28px rgba(0,0,0,.15)}
-.sidebar{border-right:1px solid #ddd;padding:14px;display:flex;flex-direction:column;gap:0;overflow-y:auto;background:#f6f6f4}
-.canvas-area{display:flex;align-items:center;justify-content:center;background:#e8e4df;position:relative;overflow:hidden;min-height:400px}
+body{font-family:monospace;background:#ccc;margin:0;padding:0;min-height:100vh}
+.app{display:grid;grid-template-columns:310px 1fr;border:none;border-radius:0;overflow:visible;background:#fff;width:100vw;max-width:100%;align-items:start}
+.sidebar{border-right:1px solid #ddd;padding:14px;display:flex;flex-direction:column;gap:0;overflow-y:auto;background:#f6f6f4;border-radius:0}
+.canvas-area{display:flex;align-items:center;justify-content:center;background:#e8e4df;overflow:hidden;position:sticky;top:0;height:100vh;align-self:start;border-radius:0}
 /* sections */
 .section{border-bottom:1px solid #e8e8e8}
 .section-head{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;cursor:pointer;user-select:none;background:#f6f6f4}
