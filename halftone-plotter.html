@@ -238,7 +238,7 @@ svg#output{display:none;max-width:100%;max-height:600px}
     </div>
 
     <div class="bottom-bar">
-      <button class="btn-o" id="dlBtn" disabled>&#11015; Download SVG</button>
+      <div id="dlBtns" style="display:flex;flex-direction:column;gap:5px"></div>
       <div class="status" id="status"><span class="ld"></span>Load an image to begin</div>
     </div>
   </div>
@@ -257,7 +257,7 @@ svg#output{display:none;max-width:100%;max-height:600px}
 const $=id=>document.getElementById(id);
 const PAPERS={custom:null,A6:[105,148],A5:[148,210],A4:[210,297],A3:[297,420],A2:[420,594],Letter:[215.9,279.4],Legal:[215.9,355.6],Tabloid:[279.4,431.8],'4x6':[101.6,152.4],'5x7':[127,177.8],Square6:[152.4,152.4],Square12:[304.8,304.8]};
 const PRESETS=['#1a1a1a','#C0392B','#2471A3','#1E8449','#8E44AD','#E67E22','#148F77'];
-let imgData=null, svgStr='', timer=null;
+let imgData=null, svgStr='', channelSvgs=[], timer=null;
 let channels=[{color:'#1a1a1a',enabled:true}];
 
 // ── collapsible sections ──────────────────────────────────
@@ -430,26 +430,51 @@ function render(){
 
   const {width:W,height:H,data}=imgData;
   const maxR=(gs/2)*md;
-  const multi=channels.filter(c=>c.enabled).length>1;
+  const enabledChs=channels.filter(c=>c.enabled);
+  const multi=enabledChs.length>1;
 
   // tonal pipeline
   function toV(rawLuma){
     let v=rawLuma;
-    v=Math.pow(v,gamma);       // gamma
-    v=v+bright;                // brightness
-    v=(v-.5)*ct+.5;            // contrast
+    v=Math.pow(v,gamma);
+    v=v+bright;
+    v=(v-.5)*ct+.5;
     v=Math.max(0,Math.min(1,v));
-    // remap shadow/highlight
     v=(v-shadowT)/(hiT-shadowT);
     v=Math.max(0,Math.min(1,v));
     return inv?v:1-v;
   }
 
-  function getV(x,y,ch){
+  // Base luminance value (single-channel path)
+  function baseV(x,y){
     const sx=Math.max(0,Math.min(W-1,Math.floor(x)));
     const sy=Math.max(0,Math.min(H-1,Math.floor(y)));
-    if(multi)return chWeight(data,sx,sy,W,ch.color);
     return toV(luma(data,sx,sy,W));
+  }
+
+  // For multi-channel: ch0 draws where image is dark (normal).
+  // ch1+ draw in the GAPS left by ch0 — i.e. where ch0 mark size
+  // was small, meaning brighter areas. This way inks sit beside each
+  // other rather than on top. We offset the angle per channel so
+  // lines/dots interleave cleanly.
+  function getV(x,y,chIdx){
+    if(!multi) return baseV(x,y);
+    const v=baseV(x,y);
+    if(chIdx===0) return v;
+    // Secondary channels fill the inverse — bright zones of the image
+    // where ch0 left gaps. Blend with overall darkness so secondary
+    // ink only appears where the image actually has tone.
+    const gap=1-v;                        // how much space ch0 left
+    const presence=baseV(x,y);           // overall image darkness
+    // weight: gaps × a fraction of image presence so empty whites stay empty
+    return Math.max(0, Math.min(1, gap * (0.4 + presence * 0.6)));
+  }
+
+  // Per-channel angle offset so marks interleave rather than overlap
+  function chAngle(chIdx){
+    if(!multi) return ang;
+    // rotate each channel by 30° increments
+    return ang + chIdx * 30;
   }
 
   const pd=getPaper();
@@ -471,10 +496,12 @@ function render(){
 
   let total=0, groups='';
   const rng=makeRng(seed);
+  channelSvgs=[];
 
-  channels.filter(c=>c.enabled).forEach(ch=>{
+  enabledChs.forEach((ch,chIdx)=>{
     const paths=[];
     const isLine=algo==='lines'||algo==='crosshatch';
+    const chAng=chAngle(chIdx);
 
     if(algo==='dots'||algo==='hexdots'||algo==='squares'||algo==='diamonds'||algo==='ellipse'||algo==='stars'){
       const hex=algo==='hexdots';
@@ -485,14 +512,13 @@ function render(){
           let cx=gx*gs+gs/2+rowOff+colOff;
           let cy=gy*gs+gs/2;
           if(cx<0||cx>=W||cy<0||cy>=H)continue;
-          const v=getV(cx,cy,ch);
+          const v=getV(cx,cy,chIdx);
           let r=v*(maxR-minMark*gs/2)+minMark*gs/2;
           if(v<0.05)continue;
-          // noise
           if(jitter>0){cx+=((rng()-.5)*gs*jitter);cy+=((rng()-.5)*gs*jitter);}
           if(sizeWobble>0)r*=(1+(rng()-.5)*sizeWobble*2);
           r=Math.max(0.3,r);
-          const rot=ang+(angWobble>0?(rng()-.5)*angWobble*2*180/Math.PI:0);
+          const rot=chAng+(angWobble>0?(rng()-.5)*angWobble*2*180/Math.PI:0);
           const rad=rot*Math.PI/180;
 
           if(algo==='dots'||algo==='hexdots'){
@@ -518,15 +544,17 @@ function render(){
         }
       }
       total+=paths.length;
-      groups+=`<g fill="${ch.color}">${paths.join('')}</g>`;
+      const chGroup=`<g fill="${ch.color}">${paths.join('')}</g>`;
+      groups+=chGroup;
+      channelSvgs[chIdx]=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}" style="background:#fafaf8"><g transform="translate(${ox.toFixed(1)},${oy.toFixed(1)}) scale(${sc.toFixed(4)})">${chGroup}</g></svg>`;
 
     } else if(algo==='lines'||algo==='crosshatch'){
-      const angs=algo==='crosshatch'?[ang*Math.PI/180,ang*Math.PI/180+Math.PI/2]:[ang*Math.PI/180];
+      const angs=algo==='crosshatch'?[chAng*Math.PI/180,chAng*Math.PI/180+Math.PI/2]:[chAng*Math.PI/180];
       for(let gy=-1;gy*gs<H+gs*2;gy++){
         const rowOff=stagger*gs*(gy%2);
         for(let gx=-1;gx*gs<W+gs*2;gx++){
           let cx=gx*gs+rowOff, cy=gy*gs;
-          const v=getV(Math.max(0,Math.min(W-1,cx)),Math.max(0,Math.min(H-1,cy)),ch);
+          const v=getV(Math.max(0,Math.min(W-1,cx)),Math.max(0,Math.min(H-1,cy)),chIdx);
           if(v<0.04)continue;
           if(jitter>0){cx+=(rng()-.5)*gs*jitter;cy+=(rng()-.5)*gs*jitter;}
           let baseHw=v*(maxR-minMark*gs/2)+minMark*gs/2;
@@ -537,7 +565,6 @@ function render(){
             const halfLen=gs/2;
             let x1=cx-Math.cos(rad)*halfLen, y1=cy-Math.sin(rad)*halfLen;
             let x2=cx+Math.cos(rad)*halfLen, y2=cy+Math.sin(rad)*halfLen;
-            // wavy
             if(waveAmp>0){
               const mid=waveAmp*Math.sin(cx*waveFreq+cy*waveFreq);
               const nx=-Math.sin(rad), ny=Math.cos(rad);
@@ -545,7 +572,6 @@ function render(){
               const da=dashArr(hw);
               paths.push(`<path d="M${x1.toFixed(1)},${y1.toFixed(1)} Q${mx.toFixed(1)},${my.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}" fill="none" stroke-width="${hw.toFixed(2)}" stroke-linecap="${lineCap}" ${da} opacity="${opacity}"/>`);
             } else {
-              // taper via multiple segments or single line
               if(taper>0){
                 const steps=6;
                 for(let si=0;si<steps;si++){
@@ -568,7 +594,9 @@ function render(){
         }
       }
       total+=paths.length;
-      groups+=`<g stroke="${ch.color}" fill="none">${paths.join('')}</g>`;
+      const chGroup=`<g stroke="${ch.color}" fill="none">${paths.join('')}</g>`;
+      groups+=chGroup;
+      channelSvgs[chIdx]=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}" style="background:#fafaf8"><g transform="translate(${ox.toFixed(1)},${oy.toFixed(1)}) scale(${sc.toFixed(4)})">${chGroup}</g></svg>`;
 
     }
   });
@@ -582,16 +610,43 @@ function render(){
   svg.style.cssText=`display:block;background:${bg};max-width:100%;max-height:600px`;
   svg.innerHTML=inner;
   $('ph').style.display='none';
-  $('dlBtn').disabled=false;
-  setStatus('ok',`${total.toLocaleString()} elements · ${channels.filter(c=>c.enabled).length} ch`);
+
+  // build per-channel download buttons
+  const dlContainer=$('dlBtns');
+  dlContainer.innerHTML='';
+  enabledChs.forEach((ch,i)=>{
+    const btn=document.createElement('button');
+    btn.className='btn-o';
+    btn.style.cssText=`border-left:4px solid ${ch.color};padding-left:10px;text-align:left`;
+    btn.innerHTML=`&#11015; Layer ${i+1} <span style="font-size:10px;color:#999;margin-left:4px">${ch.color}</span>`;
+    btn.addEventListener('click',()=>{
+      const layerSvg=channelSvgs[i];
+      if(!layerSvg)return;
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(new Blob([layerSvg],{type:'image/svg+xml'}));
+      a.download=`halftone-layer-${i+1}-${ch.color.replace('#','')}.svg`;
+      a.click();URL.revokeObjectURL(a.href);
+    });
+    dlContainer.appendChild(btn);
+  });
+  // also add an "all layers" button if more than one
+  if(enabledChs.length>1){
+    const allBtn=document.createElement('button');
+    allBtn.className='btn-o';
+    allBtn.innerHTML=`&#11015; All layers (combined)`;
+    allBtn.addEventListener('click',()=>{
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(new Blob([svgStr],{type:'image/svg+xml'}));
+      a.download='halftone-plot-all.svg';
+      a.click();URL.revokeObjectURL(a.href);
+    });
+    dlContainer.appendChild(allBtn);
+  }
+
+  setStatus('ok',`${total.toLocaleString()} elements · ${enabledChs.length} ch`);
 }
 
-$('dlBtn').addEventListener('click',()=>{
-  if(!svgStr)return;
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([svgStr],{type:'image/svg+xml'}));
-  a.download='halftone-plot.svg';a.click();
-});
+
 </script>
 </body>
 </html>
